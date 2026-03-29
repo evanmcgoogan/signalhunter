@@ -20,7 +20,10 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.events import router as events_router
+from app.api.feed import router as feed_router
 from app.api.health import router as health_router
+from app.api.signals_api import router as signals_router
 from app.config import get_settings
 
 if TYPE_CHECKING:
@@ -75,8 +78,47 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "configured" if settings.has_twilio else "not configured",
     )
 
+    # Initialize APScheduler for sensor polling (only if DB is configured)
+    scheduler = None
+    sensor_scheduler = None
+    if settings.database_url:
+        try:
+            from apscheduler import AsyncScheduler
+            from apscheduler.triggers.interval import IntervalTrigger
+
+            from app.db import get_session_factory
+            from app.deps import get_cache
+            from app.sensors.scheduler import SensorScheduler, get_poll_interval_seconds
+
+            session_factory = get_session_factory()
+            sensor_scheduler = SensorScheduler(
+                cache=get_cache(),
+                session_factory=session_factory,
+            )
+
+            interval = get_poll_interval_seconds()
+            scheduler = AsyncScheduler()
+            await scheduler.__aenter__()
+            await scheduler.add_schedule(
+                sensor_scheduler.run_cycle,
+                IntervalTrigger(seconds=interval),
+                id="sensor_poll",
+            )
+            await scheduler.start_in_background()
+            logger.info("Scheduler started: polling every %ds", interval)
+        except Exception:
+            logger.exception("Failed to start scheduler — running without polling")
+            scheduler = None
+    else:
+        logger.warning("DATABASE_URL not set — scheduler disabled")
+
     yield
 
+    # Shutdown
+    if scheduler is not None:
+        await scheduler.__aexit__(None, None, None)
+    if sensor_scheduler is not None:
+        await sensor_scheduler.shutdown()
     logger.info("Shutting down Signal Hunter")
 
 
@@ -117,6 +159,9 @@ def create_app() -> FastAPI:
 
     # Register routers
     app.include_router(health_router, tags=["system"])
+    app.include_router(events_router, tags=["data"])
+    app.include_router(signals_router, tags=["data"])
+    app.include_router(feed_router, tags=["intelligence"])
 
     return app
 

@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # ── Future: TwitterAPI.io (Phase 3) ──────────────────────────────
     twitter_api_io_key: str = ""
 
+    # ── Database (Supabase Postgres via asyncpg) ────────────────────
+    # postgresql+asyncpg://postgres.[ref]:[pwd]@aws-0-[region].pooler.supabase.com:6543/postgres
+    database_url: str = ""
+
     # ── Signal Thresholds (ported from V1) ───────────────────────────
     # These are the deterministic scoring parameters.
     # Tunable without code changes via environment variables.
