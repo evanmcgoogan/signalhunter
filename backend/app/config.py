@@ -108,6 +108,12 @@ class Settings(BaseSettings):
     synthesis_score_threshold: float = 0.3
     alert_score_threshold_high: float = 0.6
 
+    # ── Signal Novelty Suppression (Phase 1.5) ──────────────────────
+    signal_cooldown_seconds: int = 1800  # 30 min before same signal can re-fire
+    signal_min_score_delta: float = 0.05  # min score increase to re-fire
+    signal_min_evidence_delta: int = 2  # min new evidence events to re-fire
+    detection_window_minutes: int = 360  # how far back detectors look
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:

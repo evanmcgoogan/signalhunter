@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -28,7 +28,6 @@ function EventRow({ event }: { event: EventResponse }) {
 
   return (
     <div className="flex items-start gap-3 py-3 px-4 border-b border-border/20 hover:bg-card/30 transition-colors">
-      {/* Magnitude bar */}
       <div className="flex flex-col items-center gap-1 pt-0.5 w-10 shrink-0">
         <span className="text-xs font-mono font-bold text-foreground">
           {event.magnitude.toFixed(0)}
@@ -41,7 +40,6 @@ function EventRow({ event }: { event: EventResponse }) {
         </div>
       </div>
 
-      {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <Badge
@@ -82,7 +80,6 @@ function EventRow({ event }: { event: EventResponse }) {
         )}
       </div>
 
-      {/* Time */}
       <span className="text-xs font-mono text-muted-foreground whitespace-nowrap shrink-0">
         {age}
       </span>
@@ -93,46 +90,71 @@ function EventRow({ event }: { event: EventResponse }) {
 export default function EventsPage() {
   const [data, setData] = useState<EventsListResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [hours, setHours] = useState("24");
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/events?hours=${hours}&page_size=100`
+      );
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const json = await res.json();
+      setData(json);
+      setError(null);
+      setLastUpdated(new Date());
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Cannot reach Signal Hunter API"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [hours]);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch(
-          `${API_BASE}/api/events?hours=${hours}&page_size=100`
-        );
-        const json = await res.json();
-        setData(json);
-      } catch {
-        // silently fail
-      } finally {
-        setLoading(false);
-      }
-    }
     setLoading(true);
     load();
     const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
-  }, [hours]);
+  }, [load]);
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-mono font-bold">Event Stream</h1>
-        <div className="flex items-center gap-2">
-          {["1", "6", "24", "48"].map((h) => (
-            <button
-              key={h}
-              onClick={() => setHours(h)}
-              className={`px-2 py-1 text-xs font-mono rounded transition-colors ${
-                hours === h
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              {h}h
-            </button>
-          ))}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground">
+            {error ? (
+              <span className="text-red-400">API error</span>
+            ) : (
+              <>
+                {data && <span>{data.total} events ({hours}h)</span>}
+                {lastUpdated && (
+                  <span>Updated {lastUpdated.toLocaleTimeString()}</span>
+                )}
+                {data && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                )}
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {["1", "6", "24", "48"].map((h) => (
+              <button
+                key={h}
+                onClick={() => setHours(h)}
+                className={`px-2 py-1 text-xs font-mono rounded transition-colors ${
+                  hours === h
+                    ? "bg-foreground text-background"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {h}h
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -148,6 +170,15 @@ export default function EventsPage() {
             </div>
           ))}
         </div>
+      ) : error ? (
+        <Card className="bg-red-500/10 border-red-500/30">
+          <CardContent className="py-6 text-center">
+            <p className="text-sm text-red-400 font-mono">{error}</p>
+            <p className="text-xs text-red-400/60 mt-2 font-mono">
+              Check that the backend is running on {API_BASE}
+            </p>
+          </CardContent>
+        </Card>
       ) : data && data.events.length > 0 ? (
         <Card className="bg-card/50 border-border/30 overflow-hidden">
           <CardContent className="p-0">
@@ -165,7 +196,8 @@ export default function EventsPage() {
             No events in the last {hours} hours.
           </p>
           <p className="text-xs text-muted-foreground/60 mt-1">
-            Events appear when sensors detect prediction market movements.
+            Events appear when sensors detect prediction market or price
+            movements. This is not an error — markets may be quiet.
           </p>
         </div>
       )}

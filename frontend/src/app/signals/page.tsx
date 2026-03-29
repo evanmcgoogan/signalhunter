@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -104,35 +104,53 @@ function SignalCard({ signal }: { signal: SignalResponse }) {
 export default function SignalsPage() {
   const [data, setData] = useState<SignalsListResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `${API_BASE}/api/signals?hours=24&page_size=50`
+      );
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      const json = await res.json();
+      setData(json);
+      setError(null);
+      setLastUpdated(new Date());
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Cannot reach Signal Hunter API"
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch(
-          `${API_BASE}/api/signals?hours=24&page_size=50`
-        );
-        const json = await res.json();
-        setData(json);
-      } catch {
-        // silently fail
-      } finally {
-        setLoading(false);
-      }
-    }
     load();
     const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [load]);
 
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-mono font-bold">Signal Stream</h1>
-        {data && (
-          <span className="text-xs font-mono text-muted-foreground">
-            {data.total} signals (24h)
-          </span>
-        )}
+        <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground">
+          {error ? (
+            <span className="text-red-400">API error</span>
+          ) : (
+            <>
+              {data && <span>{data.total} signals (24h)</span>}
+              {lastUpdated && (
+                <span>Updated {lastUpdated.toLocaleTimeString()}</span>
+              )}
+              {data && (
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -146,6 +164,15 @@ export default function SignalsPage() {
             </Card>
           ))}
         </div>
+      ) : error ? (
+        <Card className="bg-red-500/10 border-red-500/30">
+          <CardContent className="py-6 text-center">
+            <p className="text-sm text-red-400 font-mono">{error}</p>
+            <p className="text-xs text-red-400/60 mt-2 font-mono">
+              Check that the backend is running on {API_BASE}
+            </p>
+          </CardContent>
+        </Card>
       ) : data && data.signals.length > 0 ? (
         <div className="space-y-3">
           {data.signals.map((signal) => (
@@ -158,8 +185,8 @@ export default function SignalsPage() {
             No signals detected in the last 24 hours.
           </p>
           <p className="text-xs text-muted-foreground/60 mt-1">
-            Signals appear when prediction market detectors fire on significant
-            movements.
+            This means no prediction market movements crossed the detection
+            threshold. This is not an error.
           </p>
         </div>
       )}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -150,12 +150,12 @@ function EmptyFeed({ systemStatus }: { systemStatus: string | null }) {
         </svg>
       </div>
       <h3 className="text-lg font-mono font-semibold text-foreground mb-1">
-        Sensors Active
+        Sensors Active — No Implications Yet
       </h3>
       <p className="text-sm text-muted-foreground max-w-md">
-        Signal Hunter is polling Polymarket and Kalshi for prediction market
-        movements. Implication cards will appear here when significant signals
-        are detected and synthesized by Claude.
+        Signal Hunter is polling prediction markets. Implication cards appear
+        when significant signals are detected and synthesized by Claude.
+        This is not an error — it means no signals have crossed the threshold.
       </p>
       {systemStatus && (
         <div className="mt-4">
@@ -177,32 +177,74 @@ function EmptyFeed({ systemStatus }: { systemStatus: string | null }) {
   );
 }
 
+function FreshnessBar({
+  lastUpdated,
+  total,
+  error,
+}: {
+  lastUpdated: Date | null;
+  total: number | null;
+  error: string | null;
+}) {
+  return (
+    <div className="flex items-center gap-3 text-xs font-mono text-muted-foreground">
+      {error ? (
+        <span className="text-red-400">API error</span>
+      ) : (
+        <>
+          {total !== null && <span>{total} items (48h)</span>}
+          {lastUpdated && (
+            <span>
+              Updated {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function FeedPage() {
   const [feed, setFeed] = useState<FeedResponse | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [feedRes, healthRes] = await Promise.allSettled([
+        fetch(`${API_BASE}/api/feed?hours=48`).then((r) => {
+          if (!r.ok) throw new Error(`Feed: ${r.status}`);
+          return r.json();
+        }),
+        fetch(`${API_BASE}/health`).then((r) => {
+          if (!r.ok) throw new Error(`Health: ${r.status}`);
+          return r.json();
+        }),
+      ]);
+
+      if (feedRes.status === "fulfilled") {
+        setFeed(feedRes.value);
+        setError(null);
+      } else {
+        setError(feedRes.reason?.message || "Feed fetch failed");
+      }
+      if (healthRes.status === "fulfilled") setHealth(healthRes.value);
+      setLastUpdated(new Date());
+    } catch {
+      setError("Cannot reach Signal Hunter API. Is the backend running?");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const [feedRes, healthRes] = await Promise.allSettled([
-          fetch(`${API_BASE}/api/feed?hours=48`).then((r) => r.json()),
-          fetch(`${API_BASE}/health`).then((r) => r.json()),
-        ]);
-
-        if (feedRes.status === "fulfilled") setFeed(feedRes.value);
-        if (healthRes.status === "fulfilled") setHealth(healthRes.value);
-      } catch {
-        setError("Cannot reach Signal Hunter API. Is the backend running?");
-      } finally {
-        setLoading(false);
-      }
-    }
     load();
     const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [load]);
 
   return (
     <div>
@@ -210,22 +252,29 @@ export default function FeedPage() {
 
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-xl font-mono font-bold">Intelligence Feed</h1>
-        {health && (
-          <div className="flex items-center gap-2">
-            {health.services.map((s) => (
-              <div key={s.name} className="flex items-center gap-1">
-                <div
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    s.healthy ? "bg-emerald-500" : "bg-red-500"
-                  }`}
-                />
-                <span className="text-xs font-mono text-muted-foreground">
-                  {s.name}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
+        <div className="flex items-center gap-4">
+          <FreshnessBar
+            lastUpdated={lastUpdated}
+            total={feed?.total ?? null}
+            error={error}
+          />
+          {health && (
+            <div className="flex items-center gap-2">
+              {health.services.map((s) => (
+                <div key={s.name} className="flex items-center gap-1">
+                  <div
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      s.healthy ? "bg-emerald-500" : "bg-red-500"
+                    }`}
+                  />
+                  <span className="text-xs font-mono text-muted-foreground">
+                    {s.name}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -242,8 +291,11 @@ export default function FeedPage() {
         </div>
       ) : error ? (
         <Card className="bg-red-500/10 border-red-500/30">
-          <CardContent className="py-4">
+          <CardContent className="py-6 text-center">
             <p className="text-sm text-red-400 font-mono">{error}</p>
+            <p className="text-xs text-red-400/60 mt-2 font-mono">
+              Check that the backend is running on {API_BASE}
+            </p>
           </CardContent>
         </Card>
       ) : feed && feed.items.length > 0 ? (

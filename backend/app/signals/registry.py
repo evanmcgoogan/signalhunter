@@ -56,6 +56,10 @@ class DetectorRegistry:
         Run all registered detectors against the event batch.
 
         Returns all signals found, sorted by score (highest first).
+
+        Phase 2 extension point: after collecting raw signals,
+        a clustering step can group related signals before synthesis.
+        See `_cluster_signals()` stub below.
         """
         all_signals: list[Signal] = []
 
@@ -72,6 +76,9 @@ class DetectorRegistry:
             except Exception:
                 logger.exception("Detector %s failed", detector.name)
 
+        # Phase 2: cluster related signals before returning
+        # all_signals = self._cluster_signals(all_signals)
+
         # Sort by calibrated score, highest first
         all_signals.sort(key=lambda s: s.score_calibrated, reverse=True)
 
@@ -82,6 +89,20 @@ class DetectorRegistry:
         )
 
         return all_signals
+
+    @staticmethod
+    def _cluster_signals(signals: list[Signal]) -> list[Signal]:
+        """
+        Phase 2 stub: group related signals into clusters.
+
+        When implemented, this will:
+        - Group signals by entity overlap
+        - Merge same-thesis signals into stronger composite signals
+        - Return one signal per cluster (with merged evidence)
+
+        Currently returns signals unchanged.
+        """
+        return signals
 
     @property
     def detector_names(self) -> list[str]:

@@ -33,11 +33,13 @@ from app.models.types import MarketMode
 from app.sensors.base import ObservedEvent
 from app.sensors.kalshi import KalshiSensor
 from app.sensors.polymarket import PolymarketSensor
+from app.sensors.price_feed import PriceFeedSensor
 from app.signals.registry import DetectorRegistry
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from app.config import Settings
     from app.services.cache import CacheService
     from app.services.claude import ClaudeService
 
@@ -93,8 +95,6 @@ class SensorScheduler:
     a `run_cycle` method that APScheduler calls on interval.
     """
 
-    # How far back to look for events when running detectors
-    DETECTION_WINDOW_MINUTES = 360  # 6 hours — generous for Phase 1
     # Minimum score for a signal batch to trigger synthesis
     SYNTHESIS_SCORE_THRESHOLD = 0.02
 
@@ -103,17 +103,20 @@ class SensorScheduler:
         cache: CacheService,
         session_factory: async_sessionmaker[AsyncSession],
         claude: ClaudeService | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._cache = cache
         self._session_factory = session_factory
         self._claude = claude
+        self._settings = settings
 
         # Initialize sensors
         self._polymarket = PolymarketSensor()
         self._kalshi = KalshiSensor()
+        self._price_feed = PriceFeedSensor()
 
         self._pipeline = IngestionPipeline(
-            sensors=[self._polymarket, self._kalshi],
+            sensors=[self._polymarket, self._kalshi, self._price_feed],
             cache=cache,
         )
 
@@ -174,7 +177,12 @@ class SensorScheduler:
         from app.models.types import Direction as DirEnum
 
         # Fetch recent events from DB
-        cutoff = datetime.now(UTC) - timedelta(minutes=self.DETECTION_WINDOW_MINUTES)
+        window = (
+            self._settings.detection_window_minutes
+            if self._settings
+            else 360
+        )
+        cutoff = datetime.now(UTC) - timedelta(minutes=window)
         stmt = (
             select(EventRow)
             .where(EventRow.occurred_at >= cutoff)
@@ -211,10 +219,65 @@ class SensorScheduler:
                 logger.warning("Failed to convert EventRow %s", row.id)
 
         logger.info("Running detectors on %d recent events", len(observed))
-        signals = self._registry.run_all(observed)
+        raw_signals = self._registry.run_all(observed)
+
+        if not raw_signals:
+            logger.info("No signals detected")
+            return []
+
+        # ── Novelty suppression ─────────────────────────────────
+        signals = []
+        suppressed = 0
+        for signal in raw_signals:
+            signal.compute_fingerprint()
+            cooldown = (
+                self._settings.signal_cooldown_seconds
+                if self._settings else 1800
+            )
+            score_delta = (
+                self._settings.signal_min_score_delta
+                if self._settings else 0.05
+            )
+            evidence_delta = (
+                self._settings.signal_min_evidence_delta
+                if self._settings else 2
+            )
+            should_fire, reason = self._cache.check_signal_novelty(
+                fingerprint=signal.fingerprint,
+                score=signal.score_calibrated,
+                evidence_count=len(signal.evidence_event_ids),
+                cooldown_seconds=cooldown,
+                min_score_delta=score_delta,
+                min_evidence_delta=evidence_delta,
+            )
+            if should_fire:
+                signals.append(signal)
+                logger.info(
+                    "Signal ACCEPTED [%s]: %s | %s",
+                    signal.fingerprint[:8],
+                    reason,
+                    signal.summary[:60],
+                )
+            else:
+                suppressed += 1
+                logger.info(
+                    "Signal SUPPRESSED [%s]: %s | %s",
+                    signal.fingerprint[:8],
+                    reason,
+                    signal.summary[:60],
+                )
+
+        if suppressed:
+            logger.info(
+                "Novelty filter: %d accepted, %d suppressed "
+                "out of %d raw signals",
+                len(signals),
+                suppressed,
+                len(raw_signals),
+            )
 
         if not signals:
-            logger.info("No signals detected")
+            logger.info("All signals suppressed by novelty filter")
             return []
 
         # Store signals in database
@@ -236,6 +299,7 @@ class SensorScheduler:
                 score_calibrated=signal.score_calibrated,
                 urgency=signal.urgency.value,
                 confidence=signal.confidence,
+                fingerprint=signal.fingerprint,
                 evidence_event_ids=signal.evidence_event_ids,
                 summary=signal.summary,
             )
@@ -301,4 +365,5 @@ class SensorScheduler:
         """Clean up sensor resources."""
         await self._polymarket.close()
         await self._kalshi.close()
+        await self._price_feed.close()
         logger.info("Sensor scheduler shut down")

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from upstash_redis import Redis
@@ -89,6 +90,115 @@ class CacheService:
         # Mark as seen with TTL = cooling window
         self._redis.set(key, "1", ex=cooling_minutes * 60)
         return True
+
+    # ── Signal novelty suppression ─────────────────────────────────
+
+    def check_signal_novelty(
+        self,
+        fingerprint: str,
+        score: float,
+        evidence_count: int,
+        *,
+        cooldown_seconds: int = 1800,
+        min_score_delta: float = 0.05,
+        min_evidence_delta: int = 2,
+    ) -> tuple[bool, str]:
+        """
+        Check whether a signal with this fingerprint should fire.
+
+        Returns (should_fire, reason) where reason explains the decision.
+
+        A signal is suppressed if a signal with the same fingerprint
+        was seen recently AND:
+        - score hasn't increased by min_score_delta
+        - evidence count hasn't grown by min_evidence_delta
+
+        Re-fires when:
+        - First time seeing this fingerprint
+        - Score materially increased
+        - Evidence family expanded
+        - Cooldown expired (natural re-evaluation)
+        """
+        key = f"sig_novelty:{fingerprint}"
+        existing = self.get_json(key)
+
+        if existing is None:
+            # First time — always fire
+            self._store_signal_novelty(
+                key, score, evidence_count, cooldown_seconds,
+            )
+            return True, "new_signal"
+
+        last_score = existing.get("score", 0.0)
+        last_evidence = existing.get("evidence_count", 0)
+        times_suppressed = existing.get("times_suppressed", 0)
+
+        score_delta = score - last_score
+        evidence_delta = evidence_count - last_evidence
+
+        # Check if score materially increased
+        if score_delta >= min_score_delta:
+            self._store_signal_novelty(
+                key, score, evidence_count, cooldown_seconds,
+            )
+            return True, (
+                f"score_increase: {last_score:.4f} -> {score:.4f} "
+                f"(+{score_delta:.4f})"
+            )
+
+        # Check if evidence family expanded
+        if evidence_delta >= min_evidence_delta:
+            self._store_signal_novelty(
+                key, score, evidence_count, cooldown_seconds,
+            )
+            return True, (
+                f"evidence_expanded: {last_evidence} -> "
+                f"{evidence_count} (+{evidence_delta})"
+            )
+
+        # Suppress — same thesis, no meaningful change
+        self._redis.set(
+            key,
+            json.dumps({
+                "score": last_score,
+                "evidence_count": last_evidence,
+                "times_suppressed": times_suppressed + 1,
+                "first_seen": existing.get("first_seen", ""),
+                "last_seen": datetime.now(UTC).isoformat(),
+            }),
+            ex=cooldown_seconds,
+        )
+        return False, (
+            f"suppressed (x{times_suppressed + 1}): "
+            f"score_delta={score_delta:+.4f} "
+            f"evidence_delta={evidence_delta:+d}"
+        )
+
+    def _store_signal_novelty(
+        self,
+        key: str,
+        score: float,
+        evidence_count: int,
+        ttl_seconds: int,
+    ) -> None:
+        """Store/update signal novelty state."""
+        existing = self.get_json(key)
+        first_seen = (
+            existing.get("first_seen", "")
+            if existing
+            else datetime.now(UTC).isoformat()
+        )
+        self._redis.set(
+            key,
+            json.dumps({
+                "score": score,
+                "evidence_count": evidence_count,
+                "times_suppressed": 0,
+                "first_seen": first_seen,
+                "last_seen": datetime.now(UTC).isoformat(),
+            }),
+            ex=ttl_seconds,
+        )
 
     # ── Rate limiting ────────────────────────────────────────────────
 

@@ -95,6 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 cache=get_cache(),
                 session_factory=session_factory,
                 claude=get_claude(),
+                settings=settings,
             )
 
             interval = get_poll_interval_seconds()

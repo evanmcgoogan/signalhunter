@@ -23,6 +23,7 @@ Adding a new detector = creating a new file with a BaseDetector subclass.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
@@ -60,6 +61,10 @@ class Signal(BaseModel):
     direction: Direction | None = Field(
         default=None,
         description="Directional bias",
+    )
+    fingerprint: str = Field(
+        default="",
+        description="Stable identity hash for novelty suppression",
     )
 
     # ── Scoring factors (all 0-1) ────────────────────────────────────
@@ -123,6 +128,30 @@ class Signal(BaseModel):
         )
         # Calibrated score starts as raw; updated by evaluator in Phase 5
         self.score_calibrated = self.score_raw
+
+    def compute_fingerprint(self) -> str:
+        """
+        Compute a stable identity fingerprint for novelty suppression.
+
+        Two signals with the same fingerprint represent the "same thesis"
+        and should be deduplicated. The fingerprint is based on:
+        - signal_type (which detector)
+        - sorted entities (which assets/markets)
+        - direction (bullish/bearish/neutral)
+        - thesis_key if present
+
+        Deliberately excludes: score, magnitude, timestamps, evidence IDs.
+        Those are how a signal *strengthens*, not what makes it *different*.
+        """
+        parts = [
+            self.signal_type.value,
+            "|".join(sorted(self.entities)),
+            self.direction.value if self.direction else "none",
+            self.thesis_key or "",
+        ]
+        raw = "::".join(parts)
+        self.fingerprint = hashlib.sha256(raw.encode()).hexdigest()[:20]
+        return self.fingerprint
 
     def compute_urgency(
         self,

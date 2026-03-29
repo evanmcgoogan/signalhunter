@@ -53,6 +53,11 @@ class SignalRow(Base):
     urgency: Mapped[str] = mapped_column(String(16), nullable=False, default="low")
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
 
+    # ── Novelty suppression ──────────────────────────────────────────
+    fingerprint: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="", index=True,
+    )
+
     # ── Evidence chain ─────────────────────────────────────────────
     evidence_event_ids: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
