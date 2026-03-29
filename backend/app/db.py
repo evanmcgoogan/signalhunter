@@ -62,6 +62,9 @@ def get_engine() -> create_async_engine:
         pool_size=5,
         max_overflow=10,
         pool_pre_ping=True,
+        # Supabase uses PgBouncer in transaction mode — prepared statements
+        # are not supported. Disable asyncpg's statement cache.
+        connect_args={"statement_cache_size": 0},
     )
 
 
