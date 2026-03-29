@@ -87,13 +87,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             from apscheduler.triggers.interval import IntervalTrigger
 
             from app.db import get_session_factory
-            from app.deps import get_cache
+            from app.deps import get_cache, get_claude
             from app.sensors.scheduler import SensorScheduler, get_poll_interval_seconds
 
             session_factory = get_session_factory()
             sensor_scheduler = SensorScheduler(
                 cache=get_cache(),
                 session_factory=session_factory,
+                claude=get_claude(),
             )
 
             interval = get_poll_interval_seconds()

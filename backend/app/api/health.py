@@ -143,3 +143,26 @@ async def health_check(
         timestamp=datetime.now(UTC).isoformat(),
         services=services,
     )
+
+
+@router.post("/trigger-cycle")
+async def trigger_cycle() -> dict:
+    """
+    Manually trigger a full pipeline cycle (ingest → detect → synthesize).
+
+    Useful for testing and for forcing an immediate run outside the
+    scheduled interval. Development only.
+    """
+    from app.db import get_session_factory
+    from app.deps import get_cache, get_claude
+    from app.sensors.scheduler import SensorScheduler
+
+    scheduler = SensorScheduler(
+        cache=get_cache(),
+        session_factory=get_session_factory(),
+        claude=get_claude(),
+    )
+    await scheduler.run_cycle()
+    await scheduler.shutdown()
+
+    return {"status": "cycle_complete"}
